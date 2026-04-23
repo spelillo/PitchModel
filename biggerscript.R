@@ -51,13 +51,19 @@ new_pitches <- read_csv(savant_url, show_col_types = FALSE) %>%
   )
 
 # --- 3. MERGE WITH MASTER ---
-# Download master from Drive, append new data, remove duplicates, and re-upload
-drive_download("hugemegadata.csv", overwrite = TRUE)
+# 1. Find the existing file ID (this ensures we don't try to 'own' a new file)
+target_file <- drive_get("hugemegadata.csv")
+
+# 2. Download the current version
+drive_download(target_file, overwrite = TRUE)
 master_data <- vroom("hugemegadata.csv")
 
-final_data <- bind_rows(master_data, new_pitches) %>% 
-  distinct() # This is the "Magic" button that prevents double-counting
-
+# 3. Combine and remove duplicates
+final_data <- bind_rows(master_data, new_pitches) %>% distinct()
 vroom_write(final_data, "hugemegadata.csv", delim = ",")
-drive_put("hugemegadata.csv", name = "hugemegadata.csv")
+
+# 4. UPDATE the existing file instead of putting a new one
+# drive_update uses the existing ID, so the storage quota falls on YOU (the owner), not the Service Account
+drive_update(file = target_file, media = "hugemegadata.csv")
+
 message("Weekly Sync Complete. Master CSV updated on Google Drive.")
