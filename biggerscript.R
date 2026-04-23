@@ -59,6 +59,5 @@ final_data <- bind_rows(master_data, new_pitches) %>%
   distinct() # This is the "Magic" button that prevents double-counting
 
 vroom_write(final_data, "hugemegadata.csv", delim = ",")
-drive_put("hugemegadata.csv", name = "hugemegadata.csv", media_type = "text/csv")
-
+drive_put("hugemegadata.csv", name = "hugemegadata.csv")
 message("Weekly Sync Complete. Master CSV updated on Google Drive.")
