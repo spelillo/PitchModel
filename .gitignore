@@ -1,0 +1,11 @@
+# Ignore the massive data file (too big for GitHub)
+hugemegadata.csv
+
+# Ignore your private Google Key
+.secrets/
+google_key.json
+
+# Ignore R system files
+.Rhistory
+.RData
+.Rproj.user/
