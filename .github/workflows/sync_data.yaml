@@ -15,8 +15,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          install.packages("pak")
-          pak::pkg_install(c("tidyverse", "googledrive", "vroom", "readr"))
+          install.packages(c("remotes", "pak"))
+          # Using pak for faster, more reliable installation of bigrquery and baseballr
+          pak::pkg_install(c("baseballr", "bigrquery", "tidyverse", "lubridate", "DBI"))
         shell: Rscript {0}
 
       - name: Run Scraper
