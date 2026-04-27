@@ -1,26 +1,28 @@
-name: Weekly Statcast Sync
+name: BigQuery Statcast Sync
+
 on:
   schedule:
+    # Runs every Monday at 3 AM
     - cron: '0 3 * * 1'
-  workflow_dispatch:
+  workflow_dispatch: # Allows you to trigger it manually for testing
 
 jobs:
-  sync_data:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: r-lib/actions/setup-r@v2
-        with:
-          use-public-rspm: true # This uses "pre-compiled" binaries (FAST!)
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2-5
 
       - name: Install dependencies
         run: |
           install.packages(c("remotes", "pak"))
-          # Using pak for faster, more reliable installation of bigrquery and baseballr
           pak::pkg_install(c("baseballr", "bigrquery", "tidyverse", "lubridate", "DBI"))
         shell: Rscript {0}
 
-      - name: Run Scraper
+      - name: Run BigQuery Scraper
         env:
-          GOOGLE_AUTH: ${{ secrets.GOOGLE_AUTH }}
-        run: Rscript biggerscript.R
+          GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
+        run: Rscript big_scrape.R
