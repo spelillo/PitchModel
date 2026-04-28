@@ -38,11 +38,11 @@ jobs:
       - name: Run Scrape Ingestion
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        # We start from the root. Based on your previous error, 
-        # this path should be exactly where the file lives.
-        run: Rscript PitchModel/scripts/big-beautiful-scrape.R
+        # Dropping the 'PitchModel/' prefix
+        run: Rscript scripts/big-beautiful-scrape.R
 
       - name: Update Pitcher Baselines
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        run: Rscript PitchModel/scripts/calculate_baselines.R
+        # Dropping the 'PitchModel/' prefix
+        run: Rscript scripts/calculate_baselines.R
