@@ -30,8 +30,10 @@ jobs:
       - name: Run Scrape Ingestion
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        # We use the relative path that showed up in your logs
-        run: Rscript scripts/big-beautiful-scrape.R
+        run: |
+          echo "Clearing any R workspace remnants..."
+          rm -f .RData
+          Rscript scripts/mlb_statcast_ingest.R
 
       - name: Update Pitcher Baselines
         env:
