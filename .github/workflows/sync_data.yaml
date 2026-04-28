@@ -22,7 +22,12 @@ jobs:
           pak::pkg_install(c("baseballr", "bigrquery", "tidyverse", "lubridate", "DBI"))
         shell: Rscript {0}
 
-      - name: Run BigQuery Scraper
+      - name: Run Scrape Ingestion
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        run: Rscript big_scrape.R
+        run: Rscript scripts/big-beautfiul-scrape.R
+
+      - name: Update Pitcher Baselines
+        env:
+          GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
+        run: Rscript scripts/calculate_baselines.R
