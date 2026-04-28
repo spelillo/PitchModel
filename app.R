@@ -1,38 +1,37 @@
 library(shiny)
 library(tidyverse)
-library(googledrive)
-library(googlesheets4)
+library(bigrquery)
 library(bslib)
 library(ggplot2)
 library(shinyWidgets)
-library(vroom)
 library(shinyjs)
 
 # --- 1. CONFIGURATION & AUTH ---
-# Ensure .secrets/google_key.json is in your project folder
-drive_auth(path = ".secrets/google_key.json")
-gs4_auth(path = ".secrets/google_key.json")
+options(gargle_oauth_cache = FALSE, gargle_oauth_email = TRUE)
+addResourcePath(prefix = "root", directoryPath = ".")
 
-# Download the master historical file from Google Drive
-# This ensures the app always has the data from your weekly automated scraper
-tryCatch({
-  drive_download("hugemegadata.csv", overwrite = TRUE)
-  HISTORICAL_DATA <- "hugemegadata.csv"
-}, error = function(e) {
-  showNotification("Warning: Master CSV not found on Drive. Using local backup.", type = "warning")
-  HISTORICAL_DATA <- "hugemegadata.csv" 
-})
+# Root path for deployment bundle - ensure this file is checked when publishing!
+key_path <- "google_key_2.json"
 
-SHEET_URL <- "https://docs.google.com/spreadsheets/d/1ge65vfqUEQeT4l76OatlCANpEk8EfAVdYOgwTiRkQ2s/"
+if (!file.exists(key_path)) {
+  stop("FATAL: google_key_2.json not found in the deployment bundle.")
+}
 
-# 2. Lists & Metadata
+bq_auth(path = key_path)
+
+project_id <- "pitchmodel-494200"
+dataset_id <- "pitch_model_analytics"
+view_id    <- "view_pitch_analytics_clean"
+full_path  <- paste0(project_id, ".", dataset_id, ".", view_id)
+
+# --- 2. LISTS, METADATA & HELPERS ---
 pitch_list <- c(
   "4-Seam Fastball", "Sinker", "Cutter", "Slider", "Sweeper", "Slurve",
   "Curveball", "Knuckle Curve", "Slow Curve", "Changeup", "Split-Finger", 
   "Forkball", "Screwball", "Knuckleball", "Eephus", "Pitch Out", "Other", "Unknown"
 )
 
-pa_outcomes <- c(
+pa_outcomes <- list(
   "Single" = "single", "Double" = "double", "Triple" = "triple", "Home Run" = "home_run",
   "Strikeout" = "strikeout", "Walk" = "walk", "Intent Walk" = "intent_walk", "Hit By Pitch" = "hit_by_pitch",
   "Field Out" = "field_out", "Force Out" = "force_out", "Grounded Into DP" = "grounded_into_double_play",
@@ -51,38 +50,54 @@ pitch_results <- c(
   "Pitchout" = "pitchout"
 )
 
-# --- 3. GLOBAL PRE-LOAD ---
-if (file.exists(HISTORICAL_DATA)) {
-  global_names <- vroom::vroom(HISTORICAL_DATA, col_select = player_name, show_col_types = FALSE) %>%
-    distinct(player_name) %>%
-    pull(player_name) %>%
-    sort()
-} else {
-  global_names <- c("Error: Data file missing")
+get_pitch_category <- function(pitch) {
+  case_when(
+    pitch %in% c("4-Seam Fastball", "Sinker", "Cutter") ~ "Fastball",
+    pitch %in% c("Slider", "Sweeper", "Slurve", "Curveball", "Knuckle Curve", "Slow Curve") ~ "Breaking",
+    pitch %in% c("Changeup", "Split-Finger", "Forkball", "Screwball", "Knuckleball", "Eephus") ~ "Off-speed",
+    TRUE ~ "Specialty"
+  )
 }
 
-# --- 4. UI ---
-ui <- page_sidebar(
+# --- 3. UI ---
+ui <- page_navbar(
   useShinyjs(),
   theme = bs_theme(preset = "darkly", primary = "#00bc8c"),
-  title = "Scout Pro: Situation-First Engine",
-  fillable = FALSE,
+  
+  # BRANDING
+  title = tags$span(
+    tags$head(
+      # THIS LINE SETS THE TAB TEXT
+      tags$title("PitchModel"), 
+      
+      # This sets the tab icon (favicon)
+      tags$link(rel = "icon", type = "image/png", href = "root/white-favicon.png")
+    ),
+    img(src = "root/pitchmodelcopy.png", height = "40px", style = "margin-right: 10px;"),
+    "" 
+  ),
   
   sidebar = sidebar(
     width = 375, 
     title = "Live Game State",
     accordion(
-      open = c("Personnel", "At-Bat State", "Game Context"), 
+      open = c("Session Control", "Personnel", "At-Bat State"),
+      accordion_panel(
+        "Session Control",
+        uiOutput("session_status_ui"),
+        layout_columns(
+          actionButton("start_session", "Start", class = "btn-success w-100"),
+          actionButton("end_session", "End", class = "btn-danger w-100")
+        )
+      ),
       accordion_panel(
         "Personnel",
-        actionButton("show_help", "How this works", icon = icon("circle-info"), class = "btn-info btn-sm w-100 mb-3"),
-        selectInput("active_pitcher", "Select Pitcher:", choices = c("", global_names), selectize = TRUE, width = "100%"),
-        actionButton("add_rookie", "Add New Pitcher", icon = icon("user-plus"), class = "btn-sm btn-outline-info w-100"),
-        hr(),
+        selectInput("active_pitcher", "Select Pitcher:", choices = NULL, selectize = TRUE, width = "100%"),
         layout_columns(
           radioGroupButtons("p_hand", "P-Hand", choices = c("RHP", "LHP"), status = "secondary"),
-          radioGroupButtons("b_hand", "B-Hand", choices = c("RHB", "LHB"), status = "secondary")
-        )
+          radioGroupButtons("b_hand", "B-Hand", choices = c("RHB", "LHB"))
+        ),
+        actionButton("add_rookie", "Add New Pitcher", icon = icon("user-plus"), class = "btn-sm btn-outline-info w-100")
       ),
       accordion_panel(
         "At-Bat State",
@@ -94,8 +109,8 @@ ui <- page_sidebar(
         selectInput("runners", "Runners On", choices = c("None", "1B", "2B", "3B", "1B-2B", "1B-3B", "2B-3B", "Loaded")),
         hr(),
         layout_columns(
-          actionButton("new_batter", "New Batter", class = "btn-sm btn-outline-warning w-100", icon = icon("user")),
-          actionButton("new_inning", "New Inning", class = "btn-sm btn-outline-danger w-100", icon = icon("rotate-right"))
+          actionButton("new_batter", "New Batter", class = "btn-sm btn-outline-warning w-100"),
+          actionButton("new_inning", "New Inning", class = "btn-sm btn-outline-danger w-100")
         )
       ),
       accordion_panel(
@@ -104,249 +119,313 @@ ui <- page_sidebar(
           numericInput("away_score", "Away Score", value = 0, min = 0),
           numericInput("home_score", "Home Score", value = 0, min = 0)
         ),
-        sliderInput("inning_num", "Inning:", min = 1, max = 9, value = 1, step = 1),
-        radioGroupButtons("orientation", "Half Inning:", choices = c("Top", "Bot"), justified = TRUE, status = "primary")
+        uiOutput("scoreboard_ui")
       )
     )
   ),
   
-  div( 
-    layout_columns(
-      col_widths = c(5, 3, 4),
-      uiOutput("primary_prediction_box"),
-      value_box(
-        title = "Session Accuracy",
-        value = textOutput("session_acc"),
-        showcase = bsicons::bs_icon("graph-up"),
-        theme = "success"
-      ),
-      card(
-        card_header("Session Management"),
-        card_body(
-          uiOutput("session_status_ui"),
-          layout_columns(
-            actionButton("start_session", "Start Session", class = "btn-success w-100"),
-            actionButton("end_session", "End Session", class = "btn-danger w-100")
-          )
-        )
-      )
-    ),
-    
-    layout_columns(
-      col_widths = c(7, 5), 
-      card(
-        card_header("Log Current Pitch", class = "bg-primary text-white"),
-        card_body(
-          layout_columns(
-            col_widths = c(4, 8),
-            div(
-              selectInput("actual_pitch", "Pitch Thrown:", choices = pitch_list, selectize = FALSE, size = 15, width = "100%"),
-              actionButton("submit", "SUBMIT & LOG", class = "btn-lg btn-success w-100", style = "margin-top: 10px;")
-            ),
-            div(
+  nav_panel("Live Tracking",
+            div( 
               layout_columns(
-                col_widths = c(6, 6),
-                div(
-                  tags$b("Pitch Result"),
-                  checkboxGroupInput("pitch_res", NULL, choices = pitch_results)
+                col_widths = c(8, 4),
+                uiOutput("dynamic_prediction_box"),
+                value_box(title = "Cumulative Session Accuracy", value = textOutput("session_acc"), theme = "success")
+              ),
+              layout_columns(
+                col_widths = c(7, 5), 
+                card(
+                  card_header("Log Pitch"),
+                  layout_columns(
+                    col_widths = c(4, 8),
+                    div(
+                      selectInput("actual_pitch", "Pitch Thrown:", choices = pitch_list, selectize = FALSE, size = 12),
+                      actionButton("submit", "SUBMIT & LOG", class = "btn-lg btn-success w-100")
+                    ),
+                    div(layout_columns(
+                      div(tags$b("Result"), checkboxGroupInput("pitch_res", NULL, choices = pitch_results)),
+                      div(tags$b("Outcome"), checkboxGroupInput("pa_res", NULL, choices = pa_outcomes))
+                    ))
+                  )
                 ),
-                div(
-                  tags$b("PA Outcome"),
-                  checkboxGroupInput("pa_res", NULL, choices = pa_outcomes)
+                card(card_header("Model Confidence"), uiOutput("situation_text"), plotOutput("pie_chart", height = "300px"))
+              )
+            )
+  ),
+  
+  nav_panel("Model Performance",
+            layout_columns(
+              card(card_header("Accuracy Trend (Cumulative)"), plotOutput("accuracy_trend")),
+              value_box(title = "Relay Confidence Threshold", value = textOutput("current_threshold"), 
+                        p("Confidence needed for 80% 1:1 match probability."), theme = "info")
+            ),
+            card(card_header("Session Pitch Log"), DT::dataTableOutput("session_table"))
+  ),
+  
+  nav_panel("About",
+            card(
+              card_header("Project Methodology & Documentation"),
+              tagList(
+                h5("1. The Prediction Engine"),
+                p("PitchModel utilizes a hierarchical search algorithm to identify pitch patterns. It queries a proprietary BigQuery dataset sourced from ", 
+                  tags$a(href="https://baseballsavant.mlb.com/", "Baseball Savant", target="_blank"), 
+                  " via automated scraping and cloud-data warehousing. The model prioritizes local game state (count, runners, inning) and weights current-session data twice as heavily as historical data to account for a pitcher's immediate 'feel' and sequence tendencies."),
+                
+                h5("2. Weighted Skill Scoring"),
+                p("To accurately assess model performance beyond simple 1:1 matches, we utilize a tiered scoring system:"),
+                tags$ul(
+                  tags$li(tags$b("1.00 Pts (Exact Match):"), " The model correctly identifies the specific pitch thrown."),
+                  tags$li(tags$b("0.75 Pts (Category Match):"), " The pitch thrown matches the velocity/movement profile of the primary prediction (e.g., predicted Sinker, threw 4-Seam). This rewards the model for identifying the correct velocity band."),
+                  tags$li(tags$b("0.50 Pts (Secondary Match):"), " The pitch thrown was the model's second-most-likely prediction. This rewards the model for having the 'right answer' in its top-two considerations.")
+                ),
+                
+                h5("3. In-Game Recommendation Threshold"),
+                p("The app employs a dynamic Bayesian calibration. It begins with a 70% confidence floor. After 15 pitches are logged, the system identifies the lowest confidence level where the model has achieved an 80% accuracy for 1:1 matches. This becomes the new 'High Confidence' threshold, represented by the green checkmark on the tracking screen."),
+                
+                hr(),
+                p(style="text-align: center; font-style: italic;", 
+                  "A product of ", 
+                  tags$a(href="https://spelillo.github.io/seanpelilloenterprises/", "Sean Pelillo Enterprises", target="_blank"),
+                  tags$br(),
+                  "Last updated April 28, 2026 | © 2026 PitchModel, by Sean Pelillo Enterprises"
                 )
               )
             )
-          )
-        )
-      ),
-      
-      card(
-        card_header("Situational Analysis Filters"), 
-        card_body(
-          checkboxGroupInput("active_filters", "Active Filters:",
-                             choices = c("Batter Hand" = "b_hand", "Inning" = "inning", "Outs" = "outs", "Count" = "count", "Runners" = "runners"),
-                             selected = c("b_hand", "inning", "outs", "count", "runners"),
-                             inline = TRUE),
-          hr(),
-          uiOutput("situation_text"),
-          div(style = "height: 320px; display: flex; justify-content: center;", 
-              plotOutput("pie_chart", height = "100%", width = "100%"))
-        )
-      )
-    )
   )
 )
 
-# --- 5. SERVER ---
+# --- 4. SERVER ---
 server <- function(input, output, session) {
   
-  session_active <- reactiveVal(FALSE)
+  session_active <- reactiveVal(TRUE)
   current_session_scores <- reactiveVal(numeric(0))
   pitcher_hands <- reactiveVal(list())
+  exact_match_count <- reactiveVal(0) 
+  game_state_idx <- reactiveVal(1) 
+  dynamic_threshold <- reactiveVal(0.70)
   
-  observeEvent(input$show_help, {
-    showModal(modalDialog(
-      title = "Scout Pro Documentation",
-      easyClose = TRUE, size = "l",
-      footer = modalButton("Close"),
-      tagList(
-        p("Created by ", tags$b("Sean Pelillo"), "."),
-        p("This app uses a Master Data Lake on Google Drive for high-speed situational predictions while logging your live scouting data to Google Sheets.")
+  inning_sequence <- expand.grid(side = c("Top", "Bot"), inn = c(as.character(1:9), "10+")) %>%
+    arrange(match(inn, c(as.character(1:9), "10+")), desc(side))
+  
+  session_pitches <- reactiveVal(data.frame(
+    pitch_name = character(), 
+    top_pred = character(), second_pred = character(), model_conf = numeric(), actual_pitch = character(),
+    b_hand_clean = character(), inning = character(), orientation = character(),
+    outs_when_up = numeric(), balls = numeric(), strikes = numeric(),
+    on_1b = numeric(), on_2b = numeric(), on_3b = numeric(),
+    stringsAsFactors = FALSE
+  ))
+  
+  output$scoreboard_ui <- renderUI({
+    idx <- game_state_idx()
+    header <- tags$tr(
+      tags$th(""), 
+      lapply(c(1:9, "10+"), function(i) tags$th(i, style="text-align:center; padding: 2px; color: #888; font-size: 0.8em;"))
+    )
+    make_row <- function(type) {
+      tags$tr(
+        tags$td(tags$b(substr(type, 1, 1)), style="color: #888; padding-right: 5px;"),
+        lapply(1:10, function(i) {
+          this_idx <- if(type == "Top") (i*2 - 1) else (i*2)
+          is_active <- (idx == this_idx)
+          style <- paste0(
+            "width: 28px; height: 28px; border-radius: 4px; text-align: center; line-height: 28px; font-size: 0.75em; cursor: pointer; ",
+            if(is_active) "background-color: #00bc8c; color: white; font-weight: bold; border: 2px solid #fff;" 
+            else "background-color: #2c3e50; color: #aaa;"
+          )
+          tags$td(
+            actionLink(
+              inputId = paste0("nav_", this_idx),
+              label = substr(type, 1, 1),
+              style = style,
+              onclick = sprintf("Shiny.setInputValue('jump_to_state', %d, {priority: 'event'})", this_idx)
+            )
+          )
+        })
       )
-    ))
+    }
+    tags$table(style="width:100%; border-spacing: 3px; border-collapse: separate; margin-top: 10px;",
+               header, make_row("Top"), make_row("Bot")
+    )
   })
   
-  output$session_status_ui <- renderUI({
-    if(session_active()) span("● RECORDING ACTIVE", style="color: #00bc8c; font-weight: bold;") else span("○ INACTIVE", style="color: #e74c3c;")
-  })
-  
-  observeEvent(input$start_session, { session_active(TRUE); current_session_scores(numeric(0)); showNotification("Session Started") })
-  observeEvent(input$end_session, { session_active(FALSE); showNotification("Session Ended") })
-  
-  output$session_acc <- renderText({
-    scores <- current_session_scores()
-    if(length(scores) == 0) return("0.0%")
-    scales::percent(mean(scores), accuracy = 0.1)
-  })
-  
-  observeEvent(input$new_batter, {
-    updateNumericInput(session, "balls", value = 0)
-    updateNumericInput(session, "strikes", value = 0)
-  })
-  
-  observeEvent(input$new_inning, {
+  observeEvent(input$jump_to_state, {
+    game_state_idx(input$jump_to_state)
     updateNumericInput(session, "balls", value = 0)
     updateNumericInput(session, "strikes", value = 0)
     updateRadioGroupButtons(session, "outs", selected = "0")
     updateSelectInput(session, "runners", selected = "None")
   })
   
-  # Historical Loader
-  hist_data <- reactive({
-    req(file.exists(HISTORICAL_DATA))
-    df <- vroom::vroom(HISTORICAL_DATA, show_col_types = FALSE, delim = ",") %>%
-      mutate(
-        b_hand_clean = case_when(b_hand == "R" ~ "RHB", b_hand == "L" ~ "LHB", TRUE ~ b_hand),
-        pitch_name = ifelse(is.na(pitch_name) | pitch_name == "", "Unknown", pitch_name)
-      )
-    hl <- setNames(as.character(df$p_throws), df$player_name)
-    pitcher_hands(hl)
-    return(df)
+  output$session_status_ui <- renderUI({
+    if(session_active()) span("● RECORDING ACTIVE", style="color: #00bc8c; font-weight: bold; font-size: 0.9em;")
+    else span("○ SESSION INACTIVE", style="color: #e74c3c; font-weight: bold; font-size: 0.9em;")
   })
   
-  # Pitcher Hand Lock
-  observeEvent(input$active_pitcher, {
-    if(input$active_pitcher != "") {
-      hl <- pitcher_hands()
-      if(input$active_pitcher %in% names(hl)) {
-        hand <- ifelse(hl[[input$active_pitcher]] %in% c("R", "RHP"), "RHP", "LHP")
-        updateRadioGroupButtons(session, "p_hand", selected = hand)
-        shinyjs::disable("p_hand")
-      }
-    } else { shinyjs::enable("p_hand") }
+  observeEvent(input$start_session, { session_active(TRUE) })
+  observeEvent(input$end_session, {
+    session_active(FALSE)
+    session_pitches(session_pitches()[0,])
+    current_session_scores(numeric(0))
+    game_state_idx(1)
   })
   
-  # CORE SEARCH ENGINE
-  search_results <- reactive({
+  observeEvent(input$new_batter, { 
+    updateNumericInput(session, "balls", value = 0)
+    updateNumericInput(session, "strikes", value = 0) 
+  })
+  
+  observeEvent(input$new_inning, { 
+    updateNumericInput(session, "balls", value = 0)
+    updateNumericInput(session, "strikes", value = 0)
+    updateRadioGroupButtons(session, "outs", selected = "0")
+    updateSelectInput(session, "runners", selected = "None")
+    game_state_idx(min(game_state_idx() + 1, 20))
+  })
+  
+  output$session_acc <- renderText({
+    scores <- current_session_scores()
+    if(is.null(scores) || length(scores) == 0) return("0.0%")
+    scales::percent(mean(scores, na.rm = TRUE), accuracy = 0.1)
+  })
+  
+  observe({
+    p_names <- bq_table_download(bq_project_query(project_id, paste0("SELECT DISTINCT player_name FROM `", full_path, "` ORDER BY player_name")))
+    updateSelectizeInput(session, "active_pitcher", choices = c("", p_names$player_name), server = TRUE) 
+  })
+  
+  active_pitcher_data <- reactive({
     req(input$active_pitcher != "")
-    pool <- hist_data() %>% filter(player_name == input$active_pitcher)
+    query <- sprintf("SELECT * FROM `%s` WHERE player_name = '%s'", full_path, input$active_pitcher)
+    df <- bq_table_download(bq_project_query(project_id, query))
+    if(nrow(df) == 0) return(NULL)
+    df %>% mutate(
+      b_hand_clean = case_when(as.character(stand) == "R" ~ "RHB", as.character(stand) == "L" ~ "LHB", TRUE ~ as.character(stand)),
+      on_1b = ifelse(is.na(on_1b) | on_1b == "" | on_1b == "0", 0, 1),
+      on_2b = ifelse(is.na(on_2b) | on_2b == "" | on_2b == "0", 0, 1),
+      on_3b = ifelse(is.na(on_3b) | on_3b == "" | on_3b == "0", 0, 1),
+      balls = as.numeric(balls), strikes = as.numeric(strikes),
+      outs_when_up = as.numeric(outs_when_up), 
+      inning = as.character(inning), 
+      pitch_name = ifelse(is.na(pitch_name) | pitch_name == "", "Unknown", as.character(pitch_name))
+    )
+  })
+  
+  observe({
+    df <- session_pitches()
+    req(nrow(df) >= 15, "top_pred" %in% names(df), "model_conf" %in% names(df))
+    perf_check <- df %>%
+      arrange(desc(model_conf)) %>%
+      mutate(is_correct = ifelse(actual_pitch == top_pred, 1, 0),
+             running_acc = cummean(is_correct)) %>%
+      filter(running_acc >= 0.80) %>% slice_tail(n = 1)
+    if(nrow(perf_check) > 0) dynamic_threshold(perf_check$model_conf)
+  })
+  
+  search_results <- reactive({
+    req(input$active_pitcher != "", input$balls, input$strikes, input$outs)
+    state <- inning_sequence[game_state_idx(), ]
+    cur_inn_label <- as.character(state$inn)
     
-    if ("b_hand" %in% input$active_filters) pool <- pool %>% filter(b_hand_clean == input$b_hand)
-    if ("inning" %in% input$active_filters) pool <- pool %>% filter(inning == as.numeric(input$inning_num))
-    if ("outs" %in% input$active_filters) pool <- pool %>% filter(outs_when_up == as.numeric(input$outs))
-    if ("count" %in% input$active_filters) pool <- pool %>% filter(balls == as.numeric(input$balls), strikes == as.numeric(input$strikes))
-    if ("runners" %in% input$active_filters) {
-      on1 <- ifelse(str_detect(input$runners, "1B"), 1, 0)
-      on2 <- ifelse(str_detect(input$runners, "2B"), 1, 0)
-      on3 <- ifelse(str_detect(input$runners, "3B"), 1, 0)
-      pool <- pool %>% filter(on_1b == on1, on_2b == on2, on_3b == on3)
+    base_hist <- active_pitcher_data(); live_data <- session_pitches()
+    if(!is.null(live_data) && nrow(live_data) > 0) {
+      pool <- bind_rows(base_hist, live_data[rep(seq_len(nrow(live_data)), each = 2), ])
+    } else { pool <- base_hist }
+    if(is.null(pool) || nrow(pool) == 0) return(NULL)
+    
+    l1 <- pool %>% filter(balls == as.numeric(input$balls), 
+                          strikes == as.numeric(input$strikes), 
+                          b_hand_clean == input$b_hand,
+                          on_1b == ifelse(str_detect(input$runners, "1B"), 1, 0), 
+                          on_2b == ifelse(str_detect(input$runners, "2B"), 1, 0), 
+                          on_3b == ifelse(str_detect(input$runners, "3B"), 1, 0),
+                          outs_when_up == as.numeric(input$outs), 
+                          inning == cur_inn_label) 
+    
+    exact_match_count(nrow(l1)); final_df <- l1
+    if(nrow(final_df) < 50) {
+      final_df <- bind_rows(final_df, pool %>% filter(balls == as.numeric(input$balls), strikes == as.numeric(input$strikes), b_hand_clean == input$b_hand) %>% slice_head(n = 50 - nrow(final_df)))
     }
-    return(pool)
+    return(final_df)
   })
   
   all_pitches_freq <- reactive({
-    req(search_results())
-    search_results() %>% group_by(pitch_name) %>% summarise(Count = n()) %>%
-      mutate(Prob = Count / sum(Count)) %>% arrange(desc(Prob))
+    res <- search_results()
+    if(is.null(res)) return(data.frame(pitch_name=c("Unknown"), Prob=1, Count=0))
+    res %>% group_by(pitch_name) %>% summarise(Count = n()) %>% mutate(Prob = Count / sum(Count)) %>% arrange(desc(Prob))
+  })
+  
+  output$dynamic_prediction_box <- renderUI({
+    req(all_pitches_freq())
+    p <- all_pitches_freq(); conf <- p$Prob[1]; thresh <- dynamic_threshold()
+    yellow_floor <- thresh * 0.5
+    status_info <- if (conf >= thresh) list(icon = "check-circle", label = "High Confidence") 
+    else if (conf >= yellow_floor) list(icon = "exclamation-triangle", label = "Medium Confidence") 
+    else list(icon = "exclamation-triangle", label = "Low Confidence")
+    
+    value_box(title = status_info$label, value = p$pitch_name[1], 
+              p(paste0("Model: ", scales::percent(conf, 1), " | Threshold: ", scales::percent(thresh, 1))), 
+              theme = "success", showcase = bsicons::bs_icon(status_info$icon))
   })
   
   output$situation_text <- renderUI({
-    req(all_pitches_freq(), input$active_pitcher)
+    req(all_pitches_freq())
     p <- all_pitches_freq()
-    if(nrow(p) == 0) return(HTML("<div style='color: #e74c3c;'><b>No situational matches.</b></div>"))
-    sit_str <- paste0("<div style='font-size: 1.05em; line-height: 1.4;'><b>Sample: ", sum(p$Count), " total pitches.</b></div>")
-    pitch_lines <- sapply(1:nrow(p), function(i) {
-      paste0("<span style='color: #00bc8c;'><b>", p$pitch_name[i], "</b></span>: ", scales::percent(p$Prob[i], 1), " (", p$Count[i], ")")
-    })
-    HTML(paste0(sit_str, paste(pitch_lines, collapse="<br>")))
+    HTML(paste0("<b>Sample: </b>", sum(p$Count), " (", exact_match_count(), " exact)<hr>", 
+                paste(sapply(1:nrow(p), function(i) paste0("<span style='color: #00bc8c;'><b>", p$pitch_name[i], "</b></span>: ", scales::percent(p$Prob[i], 1))), collapse="<br>")))
   })
   
   output$pie_chart <- renderPlot({
     req(all_pitches_freq())
-    p <- all_pitches_freq()
-    if(nrow(p) == 0) return(NULL)
-    ggplot(p, aes(x = "", y = Prob, fill = pitch_name)) +
-      geom_bar(stat = "identity", width = 1, color = "#222222") + coord_polar("y", start = 0) +
-      geom_text(aes(label = scales::percent(Prob, 1)), position = position_stack(vjust = 0.5), color = "white", fontface="bold", size=4) +
-      scale_fill_brewer(palette = "Set3") + theme_void() + theme(legend.text = element_text(color="white", size=10))
+    ggplot(all_pitches_freq(), aes(x = "", y = Prob, fill = pitch_name)) +
+      geom_bar(stat = "identity", width = 1, color = "#222222") + coord_polar("y") +
+      scale_fill_brewer(palette = "Set3") + theme_void() + theme(legend.text = element_text(color="white", size = 12))
   }, bg="transparent")
   
-  output$primary_prediction_box <- renderUI({
-    req(all_pitches_freq())
-    p <- all_pitches_freq()
-    if(nrow(p) == 0) return(value_box(title = "Pitch Prediction", value = "No Data", theme = "primary"))
-    top_3_summary <- paste0("1: ", p$pitch_name[1], " (", scales::percent(p$Prob[1], 1), ")",
-                            if(nrow(p) >= 2) paste0(" | 2: ", p$pitch_name[2], " (", scales::percent(p$Prob[2], 1), ")") else "",
-                            if(nrow(p) >= 3) paste0(" | 3: ", p$pitch_name[3], " (", scales::percent(p$Prob[3], 1), ")") else "")
-    value_box(title = "Pitch Prediction", value = p$pitch_name[1], p(top_3_summary), theme = "primary")
-  })
+  output$current_threshold <- renderText({ scales::percent(dynamic_threshold(), 1) })
   
-  # SUBMIT EVENT
   observeEvent(input$submit, {
-    if(!session_active()) { showNotification("Start Session first!", type = "error"); return() }
+    if(!session_active()) { showNotification("Session inactive.", type = "error"); return() }
+    p_data <- all_pitches_freq()
+    top_pred <- p_data$pitch_name[1]
+    second_pred <- if(nrow(p_data) > 1) p_data$pitch_name[2] else "None"
     
-    # 1. Prediction Accuracy
-    p_names <- all_pitches_freq()$pitch_name
-    score <- case_when(input$actual_pitch == p_names[1] ~ 1.0, input$actual_pitch == p_names[2] ~ 0.67, input$actual_pitch == p_names[3] ~ 0.33, TRUE ~ 0)
+    score <- case_when(
+      input$actual_pitch == top_pred ~ 1.0,
+      get_pitch_category(input$actual_pitch) == get_pitch_category(top_pred) ~ 0.75,
+      input$actual_pitch == second_pred ~ 0.50,
+      TRUE ~ 0.0
+    )
     current_session_scores(c(current_session_scores(), score))
     
-    # 2. LOG TO GOOGLE SHEET (Journaling)
-    new_entry <- data.frame(
-      Timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"), 
-      Pitcher_Name = input$active_pitcher,
-      P_Hand = input$p_hand, 
-      B_Hand = input$b_hand, 
-      Inning = input$inning_num,
-      Balls = input$balls, 
-      Strikes = input$strikes, 
-      Outs = as.numeric(input$outs),
-      Away_Score = input$away_score,
-      Home_Score = input$home_score,
-      Actual_Pitch = input$actual_pitch,
-      Pitch_Result = paste(input$pitch_res, collapse = ", "),
-      PA_Outcome = paste(input$pa_res, collapse = ", "),
-      Accuracy_Score = score
+    state <- inning_sequence[game_state_idx(), ]
+    new_memory_row <- data.frame(
+      pitch_name = input$actual_pitch, top_pred = top_pred, second_pred = second_pred,
+      model_conf = p_data$Prob[1], actual_pitch = input$actual_pitch,
+      b_hand_clean = input$b_hand, inning = state$inn, orientation = state$side,
+      outs_when_up = as.numeric(input$outs), balls = as.numeric(input$balls), strikes = as.numeric(input$strikes),
+      on_1b = ifelse(str_detect(input$runners, "1B"), 1, 0), on_2b = ifelse(str_detect(input$runners, "2B"), 1, 0), on_3b = ifelse(str_detect(input$runners, "3B"), 1, 0),
+      stringsAsFactors = FALSE
     )
-    sheet_append(SHEET_URL, new_entry)
-    
-    # 3. AUTO-UPDATE COUNT
-    ball_types <- c("ball", "blocked_ball", "automatic_ball", "pitchout")
-    strike_types <- c("called_strike", "swinging_strike", "swinging_strike_blocked", "automatic_strike", "foul", "foul_tip", "foul_bunt", "bunt_foul_tip", "missed_bunt")
+    session_pitches(bind_rows(session_pitches(), new_memory_row))
     
     if (length(input$pa_res) > 0) {
-      updateNumericInput(session, "balls", value = 0)
-      updateNumericInput(session, "strikes", value = 0)
+      updateNumericInput(session, "balls", value = 0); updateNumericInput(session, "strikes", value = 0)
     } else if (length(input$pitch_res) > 0) {
-      if (any(input$pitch_res %in% ball_types)) {
-        updateNumericInput(session, "balls", value = min(input$balls + 1, 3))
-      } else if (any(input$pitch_res %in% strike_types)) {
-        updateNumericInput(session, "strikes", value = min(input$strikes + 1, 2))
-      }
+      if (any(input$pitch_res %in% c("ball", "blocked_ball"))) updateNumericInput(session, "balls", value = min(input$balls + 1, 3)) 
+      else updateNumericInput(session, "strikes", value = min(input$strikes + 1, 2))
     }
-    
-    updateCheckboxGroupInput(session, "pitch_res", selected = character(0))
-    updateCheckboxGroupInput(session, "pa_res", selected = character(0))
-    showNotification("Logged & Count Updated.")
+    updateCheckboxGroupInput(session, "pitch_res", selected = character(0)); updateCheckboxGroupInput(session, "pa_res", selected = character(0))
+  })
+  
+  output$accuracy_trend <- renderPlot({
+    df <- session_pitches(); req(nrow(df) > 0)
+    df %>% mutate(pitch_num = row_number(), is_correct = ifelse(actual_pitch == top_pred, 1, 0), cum_acc = cummean(is_correct)) %>%
+      ggplot(aes(x = pitch_num, y = cum_acc)) + geom_line(color = "#00bc8c", linewidth = 1.2) + geom_point(size = 3, color = "#00bc8c") + ylim(0, 1) + labs(x = "Pitches Logged", y = "Cumulative 1:1 Accuracy") + theme_minimal() + theme(text = element_text(color = "white"), panel.grid.major = element_line(color = "#444444"))
+  }, bg = "transparent")
+  
+  output$session_table <- DT::renderDataTable({
+    session_pitches() %>% select(pitch_name, top_pred, second_pred, model_conf, actual_pitch) %>%
+      mutate(model_conf = scales::percent(model_conf, 1))
   })
 }
 
