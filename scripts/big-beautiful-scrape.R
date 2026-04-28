@@ -5,7 +5,7 @@ library(lubridate)
 # --- 1. CONFIGURATION ---
 project_id <- "pitchmodel-494200"
 dataset_id <- "pitch_model_analytics"
-table_id   <- "all_pitches_2023_2026"
+table_id <- "all_pitches_2023_2026"
 
 # --- 2. AUTHENTICATION ---
 if (Sys.getenv("GCP_AUTH_JSON") != "") {
@@ -15,8 +15,8 @@ if (Sys.getenv("GCP_AUTH_JSON") != "") {
   message("SUCCESS: Service Account Authenticated.")
 }
 
-# --- 3. DEFINE DATE CHUNKS (2023-2026) ---
-# Starting from the beginning of the 2023 season
+# --- 3. DEFINE DATE CHUNKS (FULL PROJECT SCOPE) ---
+# This covers from the 2023 Opening Day through the end of the 2026 season
 date_chunks <- seq(as.Date("2023-03-30"), as.Date("2026-10-01"), by = "4 days")
 
 message(sprintf("--- STARTING FULL MLB SCRAPE: %s CHUNKS ---", length(date_chunks)-1))
@@ -27,7 +27,7 @@ for (i in 1:(length(date_chunks) - 1)) {
   s_date <- date_chunks[i]
   e_date <- date_chunks[i+1] - 1
   
-  # Only run for April through October
+  # Offseason Filter: Only run for April through October
   if (!(month(s_date) %in% 4:10)) {
     next
   }
@@ -39,19 +39,21 @@ for (i in 1:(length(date_chunks) - 1)) {
   url <- paste0("https://baseballsavant.mlb.com/statcast_search/csv?all=true&type=details&player_type=pitcher&game_date_gt=", 
                 as.character(s_date), "&game_date_lt=", as.character(e_date))
   
-  # Download and Process
+  # Step A: Download
   daily_data <- tryCatch({
     read_csv(url, show_col_types = FALSE)
   }, error = function(e) {
-    message("   !!! Timeout or Error. Skipping."); return(NULL)
+    message("   !!! Savant Timeout. Skipping chunk."); return(NULL)
   })
   
   if (!is.null(daily_data) && nrow(daily_data) > 0) {
     
+    # Step B: Clean Headers
     clean_data <- daily_data %>%
       rename_with(~str_replace_all(., "\\.", "_")) %>%
       mutate(across(everything(), as.character))
     
+    # Step C: BigQuery Upload
     tryCatch({
       bq_table_upload(
         x = bq_table(project_id, dataset_id, table_id),
@@ -68,6 +70,7 @@ for (i in 1:(length(date_chunks) - 1)) {
     message("   -> No data found.")
   }
   
+  # Polite delay to avoid rate limits
   Sys.sleep(5)
 }
 
