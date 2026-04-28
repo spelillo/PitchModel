@@ -297,6 +297,23 @@ server <- function(input, output, session) {
     req(input$active_pitcher != "")
     query <- sprintf("SELECT * FROM `%s` WHERE player_name = '%s'", full_path, input$active_pitcher)
     df <- bq_table_download(bq_project_query(project_id, query))
+    
+    # --- NEW BASELINE LOOKUP LOGIC ---
+    baseline_query <- sprintf("SELECT baseline_80_threshold FROM `%s.%s.pitcher_performance_baselines` WHERE player_name = '%s'", 
+                              project_id, dataset_id, input$active_pitcher)
+    
+    # Use tryCatch to prevent the app from crashing if the table doesn't exist yet
+    baseline_df <- tryCatch({
+      bq_table_download(bq_project_query(project_id, baseline_query))
+    }, error = function(e) return(NULL))
+    
+    if(!is.null(baseline_df) && nrow(baseline_df) > 0) {
+      dynamic_threshold(baseline_df$baseline_80_threshold[1])
+    } else {
+      dynamic_threshold(0.75) # Global fallback if no baseline found
+    }
+    # --------------------------------
+    
     if(nrow(df) == 0) return(NULL)
     df %>% mutate(
       b_hand_clean = case_when(as.character(stand) == "R" ~ "RHB", as.character(stand) == "L" ~ "LHB", TRUE ~ as.character(stand)),
