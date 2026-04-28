@@ -8,16 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # This forces the runner to look inside your subfolder for EVERY step
-    defaults:
-      run:
-        working-directory: ./PitchModel
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          path: PitchModel # Force checkout into this specific folder
 
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
@@ -37,7 +30,7 @@ jobs:
       - name: Run Scrape Ingestion
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        # Since working-directory is set, we just use scripts/
+        # We use the relative path that showed up in your logs
         run: Rscript scripts/big-beautiful-scrape.R
 
       - name: Update Pitcher Baselines
