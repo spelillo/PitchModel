@@ -5,9 +5,9 @@ library(lubridate)
 # --- 1. CONFIGURATION ---
 project_id <- "pitchmodel-494200"
 dataset_id <- "pitch_model_analytics"
-table_id   <- "all_pitches_2023_2026"
+table_id <- "all_pitches_2023_2026"
 
-# --- 2. AUTHENTICATION (FOR GITHUB ACTIONS) ---
+# --- 2. AUTHENTICATION ---
 if (Sys.getenv("GCP_AUTH_JSON") != "") {
   tmp_auth <- tempfile(fileext = ".json")
   writeLines(Sys.getenv("GCP_AUTH_JSON"), tmp_auth)
@@ -15,8 +15,8 @@ if (Sys.getenv("GCP_AUTH_JSON") != "") {
   message("SUCCESS: Service Account Authenticated.")
 }
 
-# --- 3. DEFINE DATE CHUNKS (THE FIX) ---
-# We define this BEFORE the loop so the script knows what 'date_chunks' is.
+# --- 3. DEFINE DATE CHUNKS ---
+# Sanitized definition
 date_chunks <- seq(as.Date("2025-04-01"), as.Date("2026-04-28"), by = "4 days")
 
 message(sprintf("--- SCRAPE START: %s CHUNKS ---", length(date_chunks)-1))
@@ -27,7 +27,7 @@ for (i in 1:(length(date_chunks) - 1)) {
   s_date <- date_chunks[i]
   e_date <- date_chunks[i+1] - 1
   
-  # Offseason Filter: Only run for April (4) through October (10)
+  # Offseason Filter
   if (!(month(s_date) %in% 4:10)) {
     next
   }
@@ -35,8 +35,9 @@ for (i in 1:(length(date_chunks) - 1)) {
   timestamp <- format(Sys.time(), "%H:%M:%S")
   message(sprintf("[%s] Processing: %s to %s", timestamp, s_date, e_date))
   
+  # Manual URL Construction
   url <- paste0("https://baseballsavant.mlb.com/statcast_search/csv?all=true&type=details&player_type=pitcher&game_date_gt=", 
-                s_date, "&game_date_lt=", e_date)
+                as.character(s_date), "&game_date_lt=", as.character(e_date))
   
   # Step A: Download
   daily_data <- tryCatch({
@@ -47,7 +48,7 @@ for (i in 1:(length(date_chunks) - 1)) {
   
   if (!is.null(daily_data) && nrow(daily_data) > 0) {
     
-    # Step B: Clean Headers (Dots to Underscores)
+    # Step B: Clean Headers
     clean_data <- daily_data %>%
       rename_with(~str_replace_all(., "\\.", "_")) %>%
       mutate(across(everything(), as.character))
@@ -69,7 +70,6 @@ for (i in 1:(length(date_chunks) - 1)) {
     message("   -> No data found.")
   }
   
-  # Polite delay
   Sys.sleep(5)
 }
 
