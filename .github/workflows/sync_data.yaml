@@ -2,19 +2,12 @@ name: BigQuery Statcast Sync
 
 on:
   schedule:
-    # Runs every Monday at 3 AM
     - cron: '0 3 * * 1'
-  workflow_dispatch: # Allows you to trigger it manually for testing
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    ## KEY CHANGE: This tells GitHub to run all commands inside the PitchModel folder.
-    ## This is the primary fix for the "No such file or directory" error.
-    defaults:
-      run:
-        working-directory: ./PitchModel
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,15 +16,11 @@ jobs:
         uses: r-lib/actions/setup-r@v2
 
       - name: Install system dependencies
-        ## HOW IT WORKS: Installs the Linux libraries needed for the R 'curl' and 'openssl' packages.
         run: |
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
 
       - name: Install R dependencies
-        ## HOW IT WORKS: Added the PPM repository line. 
-        ## This pulls pre-compiled "Binaries" instead of building from "Source."
-        ## This should turn your 22-minute run into a ~5-minute run.
         run: |
           install.packages(c("remotes", "pak"))
           options(repos = c(PPM = "https://packagemanager.posit.co/cran/__linux__/jammy/latest", CRAN = "https://cloud.r-project.org"))
@@ -39,14 +28,13 @@ jobs:
         shell: Rscript {0}
 
       - name: Run Scrape Ingestion
-        ## HOW IT WORKS: Executes your resilient loop. 
-        ## Because of the 'defaults' above, it looks in PitchModel/scripts/
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        run: Rscript scripts/big-beautfiul-scrape.R
+        # FIXED: Corrected spelling to 'beautiful' and added 'PitchModel/' prefix
+        run: Rscript PitchModel/scripts/big-beautiful-scrape.R
 
       - name: Update Pitcher Baselines
-        ## HOW IT WORKS: Updates your 80% baseline lookup table in BigQuery.
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        run: Rscript scripts/calculate_baselines.R
+        # FIXED: Added 'PitchModel/' prefix
+        run: Rscript PitchModel/scripts/calculate_baselines.R
