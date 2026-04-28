@@ -9,8 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    ## KEY CHANGE: This tells GitHub to run all 'run' commands from inside the PitchModel folder.
-    ## This solves the 'No such file or directory' error for your scripts.
+    ## KEY CHANGE: This tells GitHub to run all commands inside the PitchModel folder.
+    ## This is the primary fix for the "No such file or directory" error.
     defaults:
       run:
         working-directory: ./PitchModel
@@ -20,30 +20,33 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup R
-        ## KEY CHANGE: Fixed the versioning from v2-5 to v2 to ensure the action can be resolved.
         uses: r-lib/actions/setup-r@v2
 
       - name: Install system dependencies
-        ## HOW IT WORKS: These are Linux-level libraries required to compile R packages like 'curl'.
+        ## HOW IT WORKS: Installs the Linux libraries needed for the R 'curl' and 'openssl' packages.
         run: |
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
 
       - name: Install R dependencies
-        ## HOW IT WORKS: Uses 'pak' for faster, parallel installation of your analytics toolkit.
+        ## HOW IT WORKS: Added the PPM repository line. 
+        ## This pulls pre-compiled "Binaries" instead of building from "Source."
+        ## This should turn your 22-minute run into a ~5-minute run.
         run: |
           install.packages(c("remotes", "pak"))
+          options(repos = c(PPM = "https://packagemanager.posit.co/cran/__linux__/jammy/latest", CRAN = "https://cloud.r-project.org"))
           pak::pkg_install(c("baseballr", "bigrquery", "tidyverse", "lubridate", "DBI"))
         shell: Rscript {0}
 
       - name: Run Scrape Ingestion
-        ## HOW IT WORKS: Executes the resilient loop to pull new data into BigQuery.
+        ## HOW IT WORKS: Executes your resilient loop. 
+        ## Because of the 'defaults' above, it looks in PitchModel/scripts/
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
         run: Rscript scripts/big-beautfiul-scrape.R
 
       - name: Update Pitcher Baselines
-        ## HOW IT WORKS: Runs the 'Time-Machine' backtest to calculate pitcher-specific reliability thresholds.
+        ## HOW IT WORKS: Updates your 80% baseline lookup table in BigQuery.
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
         run: Rscript scripts/calculate_baselines.R
