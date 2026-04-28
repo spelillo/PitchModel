@@ -30,7 +30,6 @@ jobs:
       - name: Run Scrape Ingestion
         env:
           GCP_AUTH_JSON: ${{ secrets.BIGQUERY_JSON }}
-        # This path matches your repo structure: Root -> scripts -> file
         run: Rscript scripts/big-beautiful-scrape.R
 
       - name: Update Pitcher Baselines
