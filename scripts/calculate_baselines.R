@@ -1,6 +1,14 @@
 library(bigrquery)
 library(tidyverse)
 
+# --- AUTHENTICATION (COPY-PASTE THIS) ---
+if (Sys.getenv("GCP_AUTH_JSON") != "") {
+  tmp_auth <- tempfile(fileext = ".json")
+  writeLines(Sys.getenv("GCP_AUTH_JSON"), tmp_auth)
+  bigrquery::bq_auth(path = tmp_auth)
+  message("SUCCESS: Baseline script authenticated.")
+}
+
 # --- CONFIG ---
 project_id <- "pitchmodel-494200"
 dataset_id <- "pitch_model_analytics"
