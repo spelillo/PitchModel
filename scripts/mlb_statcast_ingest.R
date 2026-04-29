@@ -16,8 +16,8 @@ if (Sys.getenv("GCP_AUTH_JSON") != "") {
 
 # --- 3. DATES (The "Double Definition") ---
 # We define BOTH names so the loop cannot fail regardless of which one it calls
-full_scrape_dates <- seq(as.Date("2023-03-30"), as.Date("2026-10-01"), by = "4 days")
-date_chunks <- full_scrape_dates 
+# Instead of 2023-2026, just get the last 2 weeks of data to stay current
+full_scrape_dates <- seq(Sys.Date() - 14, Sys.Date(), by = "4 days")date_chunks <- full_scrape_dates 
 
 message("Dates initialized. Starting loop...")
 
