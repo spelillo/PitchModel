@@ -82,11 +82,14 @@ calculate_threshold <- function(p_name, df) {
       mutate(prob = n / sum(n)) %>%
       slice_max(prob, n = 1, with_ties = FALSE)
     
-    # NEW: The Sanity Cap (No one is 100% predictable)
-    if(pred_summary$prob > 0.95) pred_summary$prob <- 0.95
+    if(nrow(pred_summary) == 0) return(NULL)
+    
+    # --- THE CAP: Force maximum confidence to 0.95 ---
+    final_prob <- pred_summary$prob
+    if(final_prob > 0.95) final_prob <- 0.95
     
     data.frame(
-      conf = pred_summary$prob, 
+      conf = final_prob, 
       match = ifelse(pred_summary$pitch_name == current$pitch_name, 1, 0)
     )
   })
@@ -120,4 +123,4 @@ bq_table_upload(
   write_disposition = "WRITE_TRUNCATE"
 )
 
-message("SUCCESS: Contextual baselines updated and uploaded.")
+message("SUCCESS: Contextual baselines with 0.95 cap updated and uploaded.")
