@@ -372,10 +372,10 @@ server <- function(input, output, session) {
     # Fallback if too few samples
     if(nrow(final_df) < 50) {
       final_df <- bind_rows(final_df, pool %>% 
-                  filter(balls == as.numeric(input$balls), 
-                         strikes == as.numeric(input$strikes), 
-                         b_hand_clean == input$b_hand) %>% 
-                  slice_head(n = 50 - nrow(final_df)))
+                              filter(balls == as.numeric(input$balls), 
+                                     strikes == as.numeric(input$strikes), 
+                                     b_hand_clean == input$b_hand) %>% 
+                              slice_head(n = 50 - nrow(final_df)))
     }
     return(final_df)
   })
@@ -388,78 +388,90 @@ server <- function(input, output, session) {
   
   output$dynamic_prediction_box <- renderUI({
     req(all_pitches_freq())
-    p <- all_pitches_freq(); conf <- p$Prob[1]; thresh <- dynamic_threshold()
-    yellow_floor <- thresh * 0.5
-    status_info <- if (conf >= thresh) list(icon = "check-circle", label = "High Confidence") 
-    else if (conf >= yellow_floor) list(icon = "exclamation-triangle", label = "Medium Confidence") 
-    else list(icon = "exclamation-triangle", label = "Low Confidence")
-    
-    value_box(title = status_info$label, value = p$pitch_name[1], 
-             p(paste0("Model: ", scales::percent(conf, 1), 
-         " | Target: ", scales::percent(thresh, 1), 
-         " (Pitcher Baseline)"))
-  })
-  
-  output$situation_text <- renderUI({
-    req(all_pitches_freq())
     p <- all_pitches_freq()
-    HTML(paste0("<b>Sample: </b>", sum(p$Count), " (", exact_match_count(), " exact)<hr>", 
-                paste(sapply(1:nrow(p), function(i) paste0("<span style='color: #00bc8c;'><b>", p$pitch_name[i], "</b></span>: ", scales::percent(p$Prob[i], 1))), collapse="<br>")))
-  })
-  
-  output$pie_chart <- renderPlot({
-    req(all_pitches_freq())
-    ggplot(all_pitches_freq(), aes(x = "", y = Prob, fill = pitch_name)) +
-      geom_bar(stat = "identity", width = 1, color = "#222222") + coord_polar("y") +
-      scale_fill_brewer(palette = "Set3") + theme_void() + theme(legend.text = element_text(color="white", size = 12))
-  }, bg="transparent")
-  
-  output$current_threshold <- renderText({ scales::percent(dynamic_threshold(), 1) })
-  
-  observeEvent(input$submit, {
-    if(!session_active()) { showNotification("Session inactive.", type = "error"); return() }
-    p_data <- all_pitches_freq()
-    top_pred <- p_data$pitch_name[1]
-    second_pred <- if(nrow(p_data) > 1) p_data$pitch_name[2] else "None"
+    conf <- p$Prob[1]
+    thresh <- dynamic_threshold()
+    yellow_floor <- thresh * 0.5
     
-    score <- case_when(
-      input$actual_pitch == top_pred ~ 1.0,
-      get_pitch_category(input$actual_pitch) == get_pitch_category(top_pred) ~ 0.75,
-      input$actual_pitch == second_pred ~ 0.50,
-      TRUE ~ 0.0
-    )
-    current_session_scores(c(current_session_scores(), score))
-    
-    state <- inning_sequence[game_state_idx(), ]
-    new_memory_row <- data.frame(
-      pitch_name = input$actual_pitch, top_pred = top_pred, second_pred = second_pred,
-      model_conf = p_data$Prob[1], actual_pitch = input$actual_pitch,
-      b_hand_clean = input$b_hand, inning = state$inn, orientation = state$side,
-      outs_when_up = as.numeric(input$outs), balls = as.numeric(input$balls), strikes = as.numeric(input$strikes),
-      on_1b = ifelse(str_detect(input$runners, "1B"), 1, 0), on_2b = ifelse(str_detect(input$runners, "2B"), 1, 0), on_3b = ifelse(str_detect(input$runners, "3B"), 1, 0),
-      stringsAsFactors = FALSE
-    )
-    session_pitches(bind_rows(session_pitches(), new_memory_row))
-    
-    if (length(input$pa_res) > 0) {
-      updateNumericInput(session, "balls", value = 0); updateNumericInput(session, "strikes", value = 0)
-    } else if (length(input$pitch_res) > 0) {
-      if (any(input$pitch_res %in% c("ball", "blocked_ball"))) updateNumericInput(session, "balls", value = min(input$balls + 1, 3)) 
-      else updateNumericInput(session, "strikes", value = min(input$strikes + 1, 2))
+    status_info <- if (conf >= thresh) {
+      list(icon = "check-circle", label = "High Confidence") 
+    } else if (conf >= yellow_floor) {
+      list(icon = "exclamation-triangle", label = "Medium Confidence") 
+    } else {
+      list(icon = "exclamation-triangle", label = "Low Confidence")
     }
-    updateCheckboxGroupInput(session, "pitch_res", selected = character(0)); updateCheckboxGroupInput(session, "pa_res", selected = character(0))
+    
+    value_box(
+      title = status_info$label, 
+      value = p$pitch_name[1], 
+      p(paste0("Model: ", scales::percent(conf, 1), 
+               " | Target: ", scales::percent(thresh, 1), 
+               " (Pitcher Baseline)")), # Fixed parenthesis here
+      theme = "success", 
+      showcase = bsicons::bs_icon(status_info$icon)
+    ) # Fixed parenthesis here
   })
-  
-  output$accuracy_trend <- renderPlot({
-    df <- session_pitches(); req(nrow(df) > 0)
-    df %>% mutate(pitch_num = row_number(), is_correct = ifelse(actual_pitch == top_pred, 1, 0), cum_acc = cummean(is_correct)) %>%
-      ggplot(aes(x = pitch_num, y = cum_acc)) + geom_line(color = "#00bc8c", linewidth = 1.2) + geom_point(size = 3, color = "#00bc8c") + ylim(0, 1) + labs(x = "Pitches Logged", y = "Cumulative 1:1 Accuracy") + theme_minimal() + theme(text = element_text(color = "white"), panel.grid.major = element_line(color = "#444444"))
-  }, bg = "transparent")
-  
-  output$session_table <- DT::renderDataTable({
-    session_pitches() %>% select(pitch_name, top_pred, second_pred, model_conf, actual_pitch) %>%
-      mutate(model_conf = scales::percent(model_conf, 1))
-  })
+    
+    output$situation_text <- renderUI({
+      req(all_pitches_freq())
+      p <- all_pitches_freq()
+      HTML(paste0("<b>Sample: </b>", sum(p$Count), " (", exact_match_count(), " exact)<hr>", 
+                  paste(sapply(1:nrow(p), function(i) paste0("<span style='color: #00bc8c;'><b>", p$pitch_name[i], "</b></span>: ", scales::percent(p$Prob[i], 1))), collapse="<br>")))
+    })
+    
+    output$pie_chart <- renderPlot({
+      req(all_pitches_freq())
+      ggplot(all_pitches_freq(), aes(x = "", y = Prob, fill = pitch_name)) +
+        geom_bar(stat = "identity", width = 1, color = "#222222") + coord_polar("y") +
+        scale_fill_brewer(palette = "Set3") + theme_void() + theme(legend.text = element_text(color="white", size = 12))
+    }, bg="transparent")
+    
+    output$current_threshold <- renderText({ scales::percent(dynamic_threshold(), 1) })
+    
+    observeEvent(input$submit, {
+      if(!session_active()) { showNotification("Session inactive.", type = "error"); return() }
+      p_data <- all_pitches_freq()
+      top_pred <- p_data$pitch_name[1]
+      second_pred <- if(nrow(p_data) > 1) p_data$pitch_name[2] else "None"
+      
+      score <- case_when(
+        input$actual_pitch == top_pred ~ 1.0,
+        get_pitch_category(input$actual_pitch) == get_pitch_category(top_pred) ~ 0.75,
+        input$actual_pitch == second_pred ~ 0.50,
+        TRUE ~ 0.0
+      )
+      current_session_scores(c(current_session_scores(), score))
+      
+      state <- inning_sequence[game_state_idx(), ]
+      new_memory_row <- data.frame(
+        pitch_name = input$actual_pitch, top_pred = top_pred, second_pred = second_pred,
+        model_conf = p_data$Prob[1], actual_pitch = input$actual_pitch,
+        b_hand_clean = input$b_hand, inning = state$inn, orientation = state$side,
+        outs_when_up = as.numeric(input$outs), balls = as.numeric(input$balls), strikes = as.numeric(input$strikes),
+        on_1b = ifelse(str_detect(input$runners, "1B"), 1, 0), on_2b = ifelse(str_detect(input$runners, "2B"), 1, 0), on_3b = ifelse(str_detect(input$runners, "3B"), 1, 0),
+        stringsAsFactors = FALSE
+      )
+      session_pitches(bind_rows(session_pitches(), new_memory_row))
+      
+      if (length(input$pa_res) > 0) {
+        updateNumericInput(session, "balls", value = 0); updateNumericInput(session, "strikes", value = 0)
+      } else if (length(input$pitch_res) > 0) {
+        if (any(input$pitch_res %in% c("ball", "blocked_ball"))) updateNumericInput(session, "balls", value = min(input$balls + 1, 3)) 
+        else updateNumericInput(session, "strikes", value = min(input$strikes + 1, 2))
+      }
+      updateCheckboxGroupInput(session, "pitch_res", selected = character(0)); updateCheckboxGroupInput(session, "pa_res", selected = character(0))
+    })
+    
+    output$accuracy_trend <- renderPlot({
+      df <- session_pitches(); req(nrow(df) > 0)
+      df %>% mutate(pitch_num = row_number(), is_correct = ifelse(actual_pitch == top_pred, 1, 0), cum_acc = cummean(is_correct)) %>%
+        ggplot(aes(x = pitch_num, y = cum_acc)) + geom_line(color = "#00bc8c", linewidth = 1.2) + geom_point(size = 3, color = "#00bc8c") + ylim(0, 1) + labs(x = "Pitches Logged", y = "Cumulative 1:1 Accuracy") + theme_minimal() + theme(text = element_text(color = "white"), panel.grid.major = element_line(color = "#444444"))
+    }, bg = "transparent")
+    
+    output$session_table <- DT::renderDataTable({
+      session_pitches() %>% select(pitch_name, top_pred, second_pred, model_conf, actual_pitch) %>%
+        mutate(model_conf = scales::percent(model_conf, 1))
+    })
 }
 
 shinyApp(ui, server)
