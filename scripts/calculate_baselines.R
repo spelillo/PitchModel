@@ -82,7 +82,8 @@ calculate_threshold <- function(p_name, df) {
       mutate(prob = n / sum(n)) %>%
       slice_max(prob, n = 1, with_ties = FALSE)
     
-    if(nrow(pred_summary) == 0) return(NULL)
+    # NEW: The Sanity Cap (No one is 100% predictable)
+    if(pred_summary$prob > 0.95) pred_summary$prob <- 0.95
     
     data.frame(
       conf = pred_summary$prob, 
