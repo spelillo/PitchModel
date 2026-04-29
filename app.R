@@ -168,7 +168,7 @@ ui <- page_navbar(
                 h5("1. The Prediction Engine"),
                 p("PitchModel utilizes a hierarchical search algorithm to identify pitch patterns. It queries a proprietary BigQuery dataset sourced from ", 
                   tags$a(href="https://baseballsavant.mlb.com/", "Baseball Savant", target="_blank"), 
-                  " via automated scraping and cloud-data warehousing. The model prioritizes local game state (count, runners, inning) and weights current-session data twice as heavily as historical data to account for a pitcher's immediate 'feel' and sequence tendencies."),
+                  " via automated scraping and cloud-data warehousing. The model prioritizes local game state (count, runners, inning) and weights current-session 3x as heavily as historical data to account for a pitcher's immediate 'feel' and sequence tendencies."),
                 
                 h5("2. Weighted Skill Scoring"),
                 p("To accurately assess model performance beyond simple 1:1 matches, we utilize a tiered scoring system:"),
@@ -343,12 +343,20 @@ server <- function(input, output, session) {
     state <- inning_sequence[game_state_idx(), ]
     cur_inn_label <- as.character(state$inn)
     
-    base_hist <- active_pitcher_data(); live_data <- session_pitches()
+    base_hist <- active_pitcher_data()
+    live_data <- session_pitches()
+    
+    # --- 3x WEIGHTING LOGIC ---
+    # We repeat the live rows 3 times to make them 3x more influential than historical rows
     if(!is.null(live_data) && nrow(live_data) > 0) {
-      pool <- bind_rows(base_hist, live_data[rep(seq_len(nrow(live_data)), each = 2), ])
-    } else { pool <- base_hist }
+      pool <- bind_rows(base_hist, live_data[rep(seq_len(nrow(live_data)), each = 3), ])
+    } else { 
+      pool <- base_hist 
+    }
+    
     if(is.null(pool) || nrow(pool) == 0) return(NULL)
     
+    # Hierarchical filter logic
     l1 <- pool %>% filter(balls == as.numeric(input$balls), 
                           strikes == as.numeric(input$strikes), 
                           b_hand_clean == input$b_hand,
@@ -358,9 +366,16 @@ server <- function(input, output, session) {
                           outs_when_up == as.numeric(input$outs), 
                           inning == cur_inn_label) 
     
-    exact_match_count(nrow(l1)); final_df <- l1
+    exact_match_count(nrow(l1))
+    final_df <- l1
+    
+    # Fallback if too few samples
     if(nrow(final_df) < 50) {
-      final_df <- bind_rows(final_df, pool %>% filter(balls == as.numeric(input$balls), strikes == as.numeric(input$strikes), b_hand_clean == input$b_hand) %>% slice_head(n = 50 - nrow(final_df)))
+      final_df <- bind_rows(final_df, pool %>% 
+                  filter(balls == as.numeric(input$balls), 
+                         strikes == as.numeric(input$strikes), 
+                         b_hand_clean == input$b_hand) %>% 
+                  slice_head(n = 50 - nrow(final_df)))
     }
     return(final_df)
   })
@@ -380,8 +395,9 @@ server <- function(input, output, session) {
     else list(icon = "exclamation-triangle", label = "Low Confidence")
     
     value_box(title = status_info$label, value = p$pitch_name[1], 
-              p(paste0("Model: ", scales::percent(conf, 1), " | Threshold: ", scales::percent(thresh, 1))), 
-              theme = "success", showcase = bsicons::bs_icon(status_info$icon))
+             p(paste0("Model: ", scales::percent(conf, 1), 
+         " | Target: ", scales::percent(thresh, 1), 
+         " (Pitcher Baseline)"))
   })
   
   output$situation_text <- renderUI({
