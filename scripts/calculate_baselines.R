@@ -33,8 +33,18 @@ calculate_threshold <- function(p_name, df) {
     history <- p_data[1:(i-1), ]
     current <- p_data[i, ]
     
+    # Improved Contextual Prediction
     pred <- history %>%
-      filter(balls == current$balls, strikes == current$strikes) %>%
+      filter(
+        balls == current$balls, 
+        strikes == current$strikes,
+        stand == current$stand,
+        # Using %in% handles NAs much better than ==
+        on_1b %in% current$on_1b,
+        on_2b %in% current$on_2b,
+        on_3b %in% current$on_3b,
+        outs_when_up == current$outs_when_up
+      ) %>%
       count(pitch_name) %>%
       mutate(prob = n / sum(n)) %>%
       slice_max(prob, n = 1, with_ties = FALSE)
