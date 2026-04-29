@@ -29,32 +29,70 @@ calculate_threshold <- function(p_name, df) {
   
   if(nrow(p_data) > 500) p_data <- tail(p_data, 500)
   
+  # Time-Machine Loop
   backlog <- map_df(50:nrow(p_data), function(i) {
     history <- p_data[1:(i-1), ]
     current <- p_data[i, ]
     
-    # Improved Contextual Prediction
-    pred <- history %>%
-      filter(
-        balls == current$balls, 
-        strikes == current$strikes,
-        stand == current$stand,
-        # Using %in% handles NAs much better than ==
-        on_1b %in% current$on_1b,
-        on_2b %in% current$on_2b,
-        on_3b %in% current$on_3b,
-        outs_when_up == current$outs_when_up
-      ) %>%
+    # --- RECURSIVE HUNT FOR SAMPLE SIZE >= 10 ---
+    match_found <- FALSE
+    attempt_level <- 1
+    pred_data <- data.frame()
+    
+    while(match_found == FALSE & attempt_level <= 4) {
+      if(attempt_level == 1) {
+        # Level 1: Full Context
+        pred_data <- history %>% filter(
+          balls == current$balls, strikes == current$strikes,
+          stand == current$stand, on_1b %in% current$on_1b,
+          on_2b %in% current$on_2b, on_3b %in% current$on_3b,
+          outs_when_up == current$outs_when_up
+        )
+      } else if(attempt_level == 2) {
+        # Level 2: Drop Outs
+        pred_data <- history %>% filter(
+          balls == current$balls, strikes == current$strikes,
+          stand == current$stand, on_1b %in% current$on_1b,
+          on_2b %in% current$on_2b, on_3b %in% current$on_3b
+        )
+      } else if(attempt_level == 3) {
+        # Level 3: Drop Runners
+        pred_data <- history %>% filter(
+          balls == current$balls, strikes == current$strikes,
+          stand == current$stand
+        )
+      } else {
+        # Level 4: Baseline (Count Only)
+        pred_data <- history %>% filter(
+          balls == current$balls, strikes == current$strikes
+        )
+      }
+      
+      if(nrow(pred_data) >= 10) {
+        match_found <- TRUE
+      } else {
+        attempt_level <- attempt_level + 1
+      }
+    }
+    
+    if(!match_found) return(NULL) 
+
+    pred_summary <- pred_data %>%
       count(pitch_name) %>%
       mutate(prob = n / sum(n)) %>%
       slice_max(prob, n = 1, with_ties = FALSE)
     
-    if(nrow(pred) == 0) return(NULL)
-    data.frame(conf = pred$prob, match = ifelse(pred$pitch_name == current$pitch_name, 1, 0))
+    if(nrow(pred_summary) == 0) return(NULL)
+    
+    data.frame(
+      conf = pred_summary$prob, 
+      match = ifelse(pred_summary$pitch_name == current$pitch_name, 1, 0)
+    )
   })
   
   if(nrow(backlog) == 0) return(NULL)
 
+  # Find point where rolling accuracy hits 80%
   threshold <- backlog %>%
     arrange(desc(conf)) %>%
     mutate(cum_acc = cummean(match)) %>%
@@ -64,7 +102,11 @@ calculate_threshold <- function(p_name, df) {
   
   if(length(threshold) == 0) threshold <- 0.75
   
-  return(data.frame(player_name = p_name, baseline_80_threshold = threshold, last_updated = Sys.time()))
+  return(data.frame(
+    player_name = p_name, 
+    baseline_80_threshold = threshold, 
+    last_updated = Sys.time()
+  ))
 }
 
 # 3. Process & Upload
@@ -77,4 +119,4 @@ bq_table_upload(
   write_disposition = "WRITE_TRUNCATE"
 )
 
-message("SUCCESS: Baselines updated and uploaded.")
+message("SUCCESS: Contextual baselines updated and uploaded.")
