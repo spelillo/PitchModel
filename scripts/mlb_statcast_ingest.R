@@ -14,13 +14,16 @@ if (Sys.getenv("GCP_AUTH_JSON") != "") {
   bq_auth(path = tmp_auth)
 }
 
-# --- 3. DATES (The "Double Definition") ---
-# We define BOTH names so the loop cannot fail regardless of which one it calls
-# Instead of 2023-2026, just get the last 2 weeks of data to stay current
-full_scrape_dates <- seq(Sys.Date() - 14, Sys.Date(), by = "4 days")
+# --- 3. DATES (Dynamic 7-Day Window) ---
+# This ensures we always look at the last week relative to "today"
+start_date <- Sys.Date() - 7
+end_date   <- Sys.Date()
+
+# We only need two dates for a single 7-day chunk
+full_scrape_dates <- c(start_date, end_date)
 date_chunks <- full_scrape_dates
 
-message("Dates initialized. Starting loop...")
+message(sprintf("Scraping window: %s to %s", start_date, end_date))
 
 # --- 4. THE LOOP ---
 for (i in 1:(length(full_scrape_dates) - 1)) {
